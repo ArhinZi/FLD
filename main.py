@@ -7,6 +7,7 @@ import numpy as np
 import cv2
 import os.path
 from scipy.spatial import distance
+from PIL import Image
 
 import threading
 
@@ -55,42 +56,64 @@ def save_human():
     sp = dlib.shape_predictor('shape_predictor_68_face_landmarks.dat')
     detector = dlib.get_frontal_face_detector()
 
-    video_capture = cv2.VideoCapture(1)
+    video_capture = cv2.VideoCapture(0)
     facerec = dlib.face_recognition_model_v1("dlib_face_recognition_resnet_model_v1.dat")
-
-    face_descriptor = ()
     while True:
         # Capture frame-by-frame
+        
         _, frame = video_capture.read()
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) # gray frame
 
-        dets = detector(gray, 1)
+        dets = detector(gray, 1) # detect faces in the grayscale frame (rects)
+        if(len(dets) == 0):
+            for i in range(10):
+                try:
+                    cv2.destroyWindow("Aligned"+str(i))
+                except:
+                    pass
+        for _, d in enumerate(dets):
+            aligned = (255 * _align_landmark(frame, sp, d)).astype(np.uint8)
+            gray_aligned = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
+            _d = detector(aligned, 1)
+            try:
+                k, __d = list(enumerate(_d))[0]
 
-        for k, d in enumerate(dets):
-            shape = sp(frame,d)
+                shape = sp(gray_aligned, __d)
 
-            face_descriptor = facerec.compute_face_descriptor(frame, shape)
-            #print(face_descriptor)
+                name = 'Aligned'+str(k)
+                try:
+                    face_descriptor = facerec.compute_face_descriptor(aligned, shape) #find face descriptor
+                except:
+                    pass
 
-            shape = _shape2np(shape)
+                ### draw face landmarks
+                np_shape = _shape2np(shape) # NumPy array of landmarks
+                for (x,y) in np_shape:
+                    cv2.circle(aligned, (x,y), 2, (0,0,0), 3)
+                #/# draw face landmarks
+
+                cv2.imshow(name, aligned)
+            except:
+                pass
+            
+            ### draw face rectangle
             (x,y,w,h) = _rect2bb(d)
             cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,0),2)
-
-            for (x,y) in shape:
-                cv2.circle(frame, (x,y), 2, (255,0,0), 3)
-            
-
-
-        aligned = _align_landmark(frame, sp, dets)
+            #/# draw face rectangle
 
 
         cv2.imshow('Video', frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            a = input()
-            if(a==""): 
+        if cv2.waitKey(1) & 0xFF == ord('q'):  
+            break 
+        if cv2.waitKey(1) & 0xFF == ord('s'):
+            print("Face number:",end='')
+            i = input()
+            print("Owner's name:",end='')
+            name = input()
+            if(name==""): 
                 break
-            memory[face_descriptor] = str(a)
+            memory[face_descriptor] = str(name)
             break
 
 
@@ -116,52 +139,45 @@ def stream_detect():
 
         dets = detector(gray, 1) # detect faces in the grayscale frame (rects)
         
-        
-        for k, d in enumerate(dets):
-            #crop = gray[d.top():d.bottom(), d.left():d.right()] # cropped face from gray frame
-            aligned = (255 * _align_landmark(gray, sp, d)).astype(np.uint8)
+        for _, d in enumerate(dets):
+            aligned = (255 * _align_landmark(frame, sp, d)).astype(np.uint8)
+            gray_aligned = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
             _d = detector(aligned, 1)
-            
-            for _, __d in enumerate(_d):
-                shape = sp(aligned, __d)
+            try:
+                k, __d = list(enumerate(_d))[0]
+
+                shape = sp(gray_aligned, __d)
+
+                name = 'Aligned'+str(k)
+                try:
+                    ### find a similar face in the db
+                    #img = Image.fromarray(aligned, 'RGB')
+                    face_descriptor = facerec.compute_face_descriptor(aligned, shape)
+                    cust_list = memory.keys()
+                    for i in cust_list:
+                        dst = distance.euclidean(face_descriptor, i)
+                        if(dst<0.5):
+                            #print(dst)
+                            name = memory[i]
+                            break
+                    #/# find a similar face in the db
+                except:
+                    pass
+
                 ### draw face landmarks
                 np_shape = _shape2np(shape) # NumPy array of landmarks
                 for (x,y) in np_shape:
                     cv2.circle(aligned, (x,y), 2, (0,0,0), 3)
                 #/# draw face landmarks
 
-                ### find a similar face in the db
-                '''face_descriptor = facerec.compute_face_descriptor(frame, shape)
-                cust_list = memory.keys()
-                for i in cust_list:
-                    dst = distance.euclidean(face_descriptor, i)
-                    if(dst<0.6):
-                        print(dst)
-                        print(memory[i])
-                        break
-                print(face_descriptor)'''
-                #/# find a similar face in the db
-
-                cv2.imshow('Aligned'+str(_), aligned)
-
-            #shape = sp(gray, d)
+                cv2.imshow(name, aligned)
+            except:
+                pass
             
-
-
-
             ### draw face rectangle
             (x,y,w,h) = _rect2bb(d)
             cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,0),2)
             #/# draw face rectangle
-
-            '''### draw face landmarks
-            np_shape = _shape2np(shape) # NumPy array of landmarks
-            for (x,y) in np_shape:
-                cv2.circle(frame, (x,y), 2, (255,0,0), 3)
-            #/# draw face landmarks'''
-
-
-        
 
 
         cv2.imshow('Video', frame)
