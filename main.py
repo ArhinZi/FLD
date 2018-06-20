@@ -8,6 +8,7 @@ import cv2
 import os.path
 from scipy.spatial import distance
 
+import threading
 
 ##
 memory = {}
@@ -27,30 +28,27 @@ def _shape2np(shape, dtype="int"):
         coords[i] = (shape.part(i).x, shape.part(i).y)
     return(coords)
 
-def _align_landmark(image, predictor, face_rects):
+def _align_landmark(image, predictor, face_rect):
     dim = 500
-    border = 10
-    result = []
+    border = 100
     mask0 = [39, 42, 57]
-    for rect in face_rects:
-        mask = np.array(mask0)
-        
-        landmarks = np.array(list(map(lambda p: [p.x, p.y], predictor(image, rect).parts())))
-        proper_landmarks = border + dim * np.load(os.path.join("/home/arhin/MEGA/Python/Projects/FLD/", 'face_template.npy'))[mask]
-        A = np.hstack([landmarks[mask], np.ones((3, 1))]).astype(np.float64)
-        B = np.hstack([proper_landmarks, np.ones((3, 1))]).astype(np.float64)
-        T = np.linalg.solve(A, B).T
-        wrapped = tr.warp(image,
-                            tr.AffineTransform(T).inverse,
-                            output_shape=(dim + 2 * border, dim + 2 * border),
-                            order=3,
-                            mode='constant',
-                            cval=0,
-                            clip=True,
-                            preserve_range=True)
-        result.append(wrapped)
-        #cv2.imshow('d', wrapped)
-    return result
+    rect = face_rect
+    mask = np.array(mask0)
+
+    landmarks = np.array(list(map(lambda p: [p.x, p.y], predictor(image, rect).parts())))
+    proper_landmarks = border + dim * np.load(os.path.join("/home/arhin/FLD/", 'face_template.npy'))[mask]
+    A = np.hstack([landmarks[mask], np.ones((3, 1))]).astype(np.float64)
+    B = np.hstack([proper_landmarks, np.ones((3, 1))]).astype(np.float64)
+    T = np.linalg.solve(A, B).T
+    wrapped = tr.warp(  image,
+                        tr.AffineTransform(T).inverse,
+                        output_shape=(dim + 2 * border, dim + 2 * border),
+                        order=0,
+                        mode='constant',
+                        cval=0,
+                        clip=True,
+                        preserve_range=True)
+    return wrapped/255.0
 ###
 
 def save_human():
@@ -63,7 +61,7 @@ def save_human():
     face_descriptor = ()
     while True:
         # Capture frame-by-frame
-        ret, frame = video_capture.read()
+        _, frame = video_capture.read()
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
@@ -101,46 +99,69 @@ def save_human():
     cv2.destroyAllWindows()
 
 
+
+
 def stream_detect():
     sp = dlib.shape_predictor('shape_predictor_68_face_landmarks.dat')
     detector = dlib.get_frontal_face_detector()
 
-    video_capture = cv2.VideoCapture(1)
+    video_capture = cv2.VideoCapture(0)
     facerec = dlib.face_recognition_model_v1("dlib_face_recognition_resnet_model_v1.dat")
     while True:
         # Capture frame-by-frame
         
-        ret, frame = video_capture.read()
+        _, frame = video_capture.read()
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) # gray frame
 
-        dets = detector(gray, 1)
-
+        dets = detector(gray, 1) # detect faces in the grayscale frame (rects)
+        
+        
         for k, d in enumerate(dets):
-            shape = sp(frame,d)
+            #crop = gray[d.top():d.bottom(), d.left():d.right()] # cropped face from gray frame
+            aligned = (255 * _align_landmark(gray, sp, d)).astype(np.uint8)
+            _d = detector(aligned, 1)
+            
+            for _, __d in enumerate(_d):
+                shape = sp(aligned, __d)
+                ### draw face landmarks
+                np_shape = _shape2np(shape) # NumPy array of landmarks
+                for (x,y) in np_shape:
+                    cv2.circle(aligned, (x,y), 2, (0,0,0), 3)
+                #/# draw face landmarks
 
-            face_descriptor = facerec.compute_face_descriptor(frame, shape)
+                ### find a similar face in the db
+                '''face_descriptor = facerec.compute_face_descriptor(frame, shape)
+                cust_list = memory.keys()
+                for i in cust_list:
+                    dst = distance.euclidean(face_descriptor, i)
+                    if(dst<0.6):
+                        print(dst)
+                        print(memory[i])
+                        break
+                print(face_descriptor)'''
+                #/# find a similar face in the db
 
-            cust_list = memory.keys()
+                cv2.imshow('Aligned'+str(_), aligned)
 
-            for i in cust_list:
-                dst = distance.euclidean(face_descriptor, i)
-                if(dst<0.6):
-                    print(dst)
-                    print(memory[i])
-                    break
-            #print(face_descriptor)
-
-            shape = _shape2np(shape)
-            (x,y,w,h) = _rect2bb(d)
-            cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,0),2)
-
-            for (x,y) in shape:
-                cv2.circle(frame, (x,y), 2, (255,0,0), 3)
+            #shape = sp(gray, d)
             
 
 
-        aligned = _align_landmark(frame, sp, dets)
+
+            ### draw face rectangle
+            (x,y,w,h) = _rect2bb(d)
+            cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,0),2)
+            #/# draw face rectangle
+
+            '''### draw face landmarks
+            np_shape = _shape2np(shape) # NumPy array of landmarks
+            for (x,y) in np_shape:
+                cv2.circle(frame, (x,y), 2, (255,0,0), 3)
+            #/# draw face landmarks'''
+
+
+        
 
 
         cv2.imshow('Video', frame)
