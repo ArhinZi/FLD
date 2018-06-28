@@ -11,11 +11,8 @@ from PIL import Image
 
 import threading
 
-##
-cam_id = 1
-memory = {}
-##
 
+memory = {}
 ###
 
 
@@ -59,83 +56,121 @@ def _align_landmark(image, predictor, face_rect):
     return wrapped/255.0
 ###
 
+class StreamSaver():
 
-def save_human():
-    sp = dlib.shape_predictor('shape_predictor_68_face_landmarks.dat')
-    detector = dlib.get_frontal_face_detector()
+    frame = None
+    cam_id = None
+    running = False
 
-    video_capture = cv2.VideoCapture(cam_id)
-    facerec = dlib.face_recognition_model_v1(
-        "dlib_face_recognition_resnet_model_v1.dat")
-    while True:
-        # Capture frame-by-frame
+    dets = None
+    names = [""]*20
+    face_descs = [""]*20
 
-        _, frame = video_capture.read()
+    def __init__(self, cam_id):
+        self.cam_id = cam_id
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)  # gray frame
+    def start(self):
+        main = threading.Thread(target=self.main_thread)
+        s_det = threading.Thread(target=self.s_detector_thread)
+        main.start()
+        s_det.start()
 
-        dets = detector(gray, 1)  # detect faces in the grayscale frame (rects)
-        if(len(dets) == 0):
-            for i in range(10):
-                try:
-                    cv2.destroyWindow("Aligned"+str(i))
-                except:
-                    pass
-        for _, d in enumerate(dets):
-            aligned = (255 * _align_landmark(frame, sp, d)).astype(np.uint8)
-            gray_aligned = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
-            _d = detector(aligned, 1)
+        s_det.join()
+
+    def main_thread(self):
+        lock = threading.RLock()
+        video_capture = cv2.VideoCapture(self.cam_id)
+        self.running = True
+        _, self.frame = video_capture.read()
+        while self.running:
+            lock.acquire()
             try:
-                k, __d = list(enumerate(_d))[0]
-
-                shape = sp(gray_aligned, __d)
-
-                name = 'Aligned'+str(k)
-                try:
-                    face_descriptor = facerec.compute_face_descriptor(
-                        aligned, shape)  # find face descriptor
-                except:
-                    pass
-
-                # draw face landmarks
-                np_shape = _shape2np(shape)  # NumPy array of landmarks
-                for (x, y) in np_shape:
-                    cv2.circle(aligned, (x, y), 2, (0, 0, 0), 3)
-                # /# draw face landmarks
-
-                cv2.imshow(name, aligned)
+                for k, d in enumerate(self.dets):
+                    # draw face rectangle
+                    (x, y, w, h) = _rect2bb(d)
+                    cv2.rectangle(self.frame, (x, y),
+                                  (x+w, y+h), (0, 255, 0), 2)
+                    cv2.putText(
+                        self.frame, self.names[k], (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                    # /# draw face rectangle
             except:
                 pass
-
-            # draw face rectangle
-            (x, y, w, h) = _rect2bb(d)
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-            # /# draw face rectangle
-
-        cv2.imshow('Video', frame)
-        key = cv2.waitKey(1)
-        if key:
-            if key == ord('q'):
-                break
-            if key == ord('s'):
-                print("Face number:", end='')
-                i = input()
-                print("Owner's name:", end='')
-                name = input()
-                if(name == ""):
+            #try:
+            cv2.imshow('Video', self.frame)
+            #except:
+                #pass
+            _, self.frame = video_capture.read()
+            key = cv2.waitKey(1)
+            if key:
+                if key == ord('q'):
+                    self.running=False
+                    cv2.destroyAllWindows()
+                    lock.release()
                     break
-                try:
-                    memory[face_descriptor] = str(name)
-                except:
-                    print("Error!!!")
-                break
+                elif key == ord('s'):
+                    print("Face number:", end='')
+                    i = input()
+                    print("Owner's name:", end='')
+                    name = input()
+                    if(name == ""):
+                        self.running=False
+                    #try:
+                    #print(len(self.face_descs))
+                    #print(self.face_descs)
+                    memory[self.face_descs[int(i)]] = str(name)
+                    #except:
+                        #print("Error!!!")
+                    self.running=False
+                    break
 
-    # When everything is done, release the capture
-    video_capture.release()
-    cv2.destroyAllWindows()
+            lock.release()
+        video_capture.release()
+        cv2.destroyAllWindows()
+        self.running = False
+
+    def s_detector_thread(self):
+        lock = threading.RLock()
+        sp = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
+        detector = dlib.get_frontal_face_detector()
+        facerec = dlib.face_recognition_model_v1(
+            "dlib_face_recognition_resnet_model_v1.dat")
+
+        while self.running:
+            if self.frame is None:
+                continue
+
+            lock.acquire()
+
+            gray = cv2.cvtColor(self.frame, cv2.COLOR_BGR2GRAY)  # gray frame
+
+            # detect faces in the grayscale frame (rects)
+            self.dets = detector(gray, 1)
+            for k, d in enumerate(self.dets):
+                aligned = (255 * _align_landmark(self.frame, sp, d)
+                           ).astype(np.uint8)
+                gray_aligned = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
+                _d = detector(aligned, 1)
+                self.names[k] = 'Face '+str(k)
+                try:
+                    _, __d = list(enumerate(_d))[0]
+
+                    shape = sp(gray_aligned, __d)
+
+                    try:
+                        # find a face descriptor
+                        self.face_descs[k] = facerec.compute_face_descriptor(
+                            aligned, shape)
+                        # /# find a face descriptor
+                    except:
+                        pass
+                except:
+                    pass
+
+            lock.release()
 
 
 class StreamDetector():
+
     frame = None
     cam_id = None
     running = False
@@ -146,8 +181,50 @@ class StreamDetector():
     def __init__(self, cam_id):
         self.cam_id = cam_id
 
-    def _detector(self):
-        lock = threading.Lock()
+    def start(self):
+        main = threading.Thread(target=self.main_thread)
+        det = threading.Thread(target=self.detector_thread)
+        main.start()
+        det.start()
+
+        main.join()
+        #det.join()
+        cv2.destroyAllWindows()
+
+    def main_thread(self):
+        lock = threading.RLock()
+        video_capture = cv2.VideoCapture(self.cam_id)
+        self.running = True
+        _, self.frame = video_capture.read()
+        while self.running:
+            lock.acquire()
+            try:
+                for k, d in enumerate(self.dets):
+                    # draw face rectangle
+                    (x, y, w, h) = _rect2bb(d)
+                    cv2.rectangle(self.frame, (x, y),
+                                  (x+w, y+h), (0, 255, 0), 2)
+                    cv2.putText(
+                        self.frame, self.names[k], (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                    # /# draw face rectangle
+            except:
+                pass
+            #try:
+            cv2.imshow('Video', self.frame)
+            #except:
+                #pass
+            _, self.frame = video_capture.read()
+            key = cv2.waitKey(1)
+            if key:
+                if key == ord('q'):
+                    self.running=False
+            lock.release()
+        video_capture.release()
+        cv2.destroyAllWindows()
+        self.running = False
+
+    def detector_thread(self):
+        lock = threading.RLock()
         sp = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
         detector = dlib.get_frontal_face_detector()
         facerec = dlib.face_recognition_model_v1(
@@ -156,17 +233,16 @@ class StreamDetector():
         while self.running:
             if self.frame is None:
                 continue
-            
-            
+
             lock.acquire()
 
             gray = cv2.cvtColor(self.frame, cv2.COLOR_BGR2GRAY)  # gray frame
 
-
-            self.dets = detector(gray, 1)  # detect faces in the grayscale frame (rects)
+            # detect faces in the grayscale frame (rects)
+            self.dets = detector(gray, 1)
             for k, d in enumerate(self.dets):
                 aligned = (255 * _align_landmark(self.frame, sp, d)
-                        ).astype(np.uint8)
+                           ).astype(np.uint8)
                 gray_aligned = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
                 _d = detector(aligned, 1)
                 self.names[k] = 'Face '+str(k)
@@ -174,7 +250,7 @@ class StreamDetector():
                     _, __d = list(enumerate(_d))[0]
 
                     shape = sp(gray_aligned, __d)
-                    
+
                     try:
                         # find a similar face in the db
                         face_descriptor = facerec.compute_face_descriptor(
@@ -190,70 +266,28 @@ class StreamDetector():
                     except:
                         pass
 
-                    # # draw face landmarks
-                    # np_shape = _shape2np(shape)  # NumPy array of landmarks
-                    # for (x, y) in np_shape:
-                    #     cv2.circle(aligned, (x, y), 2, (0, 0, 0), 3)
-                    # # /# draw face landmarks
-
-                    #cv2.imshow(name, aligned)
                 except:
                     pass
 
-                
-
             lock.release()
-
-    def start(self):
-        lock = threading.Lock()
-        video_capture = cv2.VideoCapture(self.cam_id)
-        self.running = True
-        _, self.frame = video_capture.read()
-        while True:
-            lock.acquire()
-            try:
-                for k, d in enumerate(self.dets):
-                    # draw face rectangle
-                    (x, y, w, h) = _rect2bb(d)
-                    cv2.rectangle(self.frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                    cv2.putText(self.frame, self.names[k], (x,y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-                    # /# draw face rectangle
-            except:
-                pass
-            try:
-                cv2.imshow('Video', self.frame)
-            except:
-                pass
-            _, self.frame = video_capture.read()
-            key = cv2.waitKey(1)
-            if key:
-                if key == ord('q'):
-                    break
-            lock.release()
-        video_capture.release()
-        cv2.destroyAllWindows()
-        self.running = False
 
 
 if __name__ == '__main__':
+    cam_id = 0
     print("1. Save human")
     print("2. Stream detection")
     print("0. Exit")
-    streamer = StreamDetector(cam_id)
+    StreamD = StreamDetector(cam_id)
+    StreamS = StreamSaver(cam_id)
     while True:
-        try:
+        #try:
             print(">> ", end='')
             a = input()
             if(int(a) == 1):
-                save_human()
+                StreamS.start()
             if(int(a) == 2):
-                main = threading.Thread(target=streamer.start)
-                det = threading.Thread(target=streamer._detector)
-                main.start()
-                det.start()
-
-                main.join()
+                StreamD.start()
             if(int(a) == 0):
                 break
-        except:
-            print("Error!!!")
+        #except:
+            #print("Error!!!")
