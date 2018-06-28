@@ -1,13 +1,15 @@
 import dlib
-#from skimage import io
-#from skimage.io import ImageCollection
-#from skimage.io.video import CvVideo
+# from skimage import io
+# from skimage.io import ImageCollection
+# from skimage.io.video import CvVideo
 import skimage.transform as tr
 import numpy as np
 import cv2
 import os.path
 from scipy.spatial import distance
 from PIL import Image
+import time
+import _pickle as cPickle
 
 import threading
 
@@ -56,6 +58,7 @@ def _align_landmark(image, predictor, face_rect):
     return wrapped/255.0
 ###
 
+
 class StreamSaver():
 
     frame = None
@@ -70,66 +73,53 @@ class StreamSaver():
         self.cam_id = cam_id
 
     def start(self):
-        main = threading.Thread(target=self.main_thread)
-        s_det = threading.Thread(target=self.s_detector_thread)
-        main.start()
-        s_det.start()
-
-        s_det.join()
+        det = threading.Thread(target=self.s_detector_thread)
+        det.start()
+        self.main_thread()
+        det.join()
 
     def main_thread(self):
-        lock = threading.RLock()
         video_capture = cv2.VideoCapture(self.cam_id)
         self.running = True
         _, self.frame = video_capture.read()
         while self.running:
-            lock.acquire()
-            try:
+
+            if self.dets:
                 for k, d in enumerate(self.dets):
-                    # draw face rectangle
+                    # draw face rectangle and name
                     (x, y, w, h) = _rect2bb(d)
                     cv2.rectangle(self.frame, (x, y),
                                   (x+w, y+h), (0, 255, 0), 2)
                     cv2.putText(
                         self.frame, self.names[k], (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                    # /# draw face rectangle
-            except:
-                pass
-            #try:
+                    # /# draw face rectangle and name
+
             cv2.imshow('Video', self.frame)
-            #except:
-                #pass
             _, self.frame = video_capture.read()
             key = cv2.waitKey(1)
             if key:
-                if key == ord('q'):
-                    self.running=False
-                    cv2.destroyAllWindows()
-                    lock.release()
-                    break
-                elif key == ord('s'):
+                if key == ord('s'):
                     print("Face number:", end='')
                     i = input()
                     print("Owner's name:", end='')
                     name = input()
                     if(name == ""):
-                        self.running=False
-                    #try:
-                    #print(len(self.face_descs))
-                    #print(self.face_descs)
-                    memory[self.face_descs[int(i)]] = str(name)
-                    #except:
-                        #print("Error!!!")
-                    self.running=False
+                        self.running = False
+                    if(self.face_descs[int(i)]):
+                        memory[self.face_descs[int(i)]] = str(name)
+                    else:
+                        print("Error adding")
+                    self.running = False
                     break
 
-            lock.release()
+            if cv2.getWindowProperty('Video', cv2.WND_PROP_VISIBLE) < 1:
+                break
+
         video_capture.release()
         cv2.destroyAllWindows()
         self.running = False
 
     def s_detector_thread(self):
-        lock = threading.RLock()
         sp = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
         detector = dlib.get_frontal_face_detector()
         facerec = dlib.face_recognition_model_v1(
@@ -139,34 +129,31 @@ class StreamSaver():
             if self.frame is None:
                 continue
 
-            lock.acquire()
-
+            time.sleep(0.1)
             gray = cv2.cvtColor(self.frame, cv2.COLOR_BGR2GRAY)  # gray frame
 
             # detect faces in the grayscale frame (rects)
             self.dets = detector(gray, 1)
-            for k, d in enumerate(self.dets):
-                aligned = (255 * _align_landmark(self.frame, sp, d)
-                           ).astype(np.uint8)
-                gray_aligned = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
-                _d = detector(aligned, 1)
-                self.names[k] = 'Face '+str(k)
-                try:
-                    _, __d = list(enumerate(_d))[0]
+            if(self.dets):
+                for k, d in enumerate(self.dets):
+                    aligned = (255 * _align_landmark(self.frame, sp, d)
+                               ).astype(np.uint8)
+                    gray_aligned = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
+                    _d = detector(aligned, 1)
+                    self.names[k] = 'Face '+str(k)
+                    if _d:
+                        _, __d = list(enumerate(_d))[0]
 
-                    shape = sp(gray_aligned, __d)
+                        shape = sp(gray_aligned, __d)
 
-                    try:
-                        # find a face descriptor
-                        self.face_descs[k] = facerec.compute_face_descriptor(
-                            aligned, shape)
-                        # /# find a face descriptor
-                    except:
-                        pass
-                except:
-                    pass
+                        if True:
+                            # find a similar face in the db
+                            self.face_descs[k] = facerec.compute_face_descriptor(
+                                aligned, shape)
+                            # /# find a similar face in the db
 
-            lock.release()
+            else:
+                time.sleep(0.2)
 
 
 class StreamDetector():
@@ -177,54 +164,45 @@ class StreamDetector():
 
     dets = None
     names = [""]*20
+    dst = [""]*20
 
     def __init__(self, cam_id):
         self.cam_id = cam_id
 
     def start(self):
-        main = threading.Thread(target=self.main_thread)
         det = threading.Thread(target=self.detector_thread)
-        main.start()
         det.start()
-
-        main.join()
-        #det.join()
-        cv2.destroyAllWindows()
+        self.main_thread()
+        det.join()
 
     def main_thread(self):
-        lock = threading.RLock()
         video_capture = cv2.VideoCapture(self.cam_id)
         self.running = True
         _, self.frame = video_capture.read()
         while self.running:
-            lock.acquire()
-            try:
+
+            if self.dets:
                 for k, d in enumerate(self.dets):
-                    # draw face rectangle
+                    # draw face rectangle and name
                     (x, y, w, h) = _rect2bb(d)
                     cv2.rectangle(self.frame, (x, y),
                                   (x+w, y+h), (0, 255, 0), 2)
                     cv2.putText(
-                        self.frame, self.names[k], (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                    # /# draw face rectangle
-            except:
-                pass
-            #try:
+                        self.frame, self.names[k] + " " + self.dst[k], (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                    # /# draw face rectangle and name
+
             cv2.imshow('Video', self.frame)
-            #except:
-                #pass
             _, self.frame = video_capture.read()
-            key = cv2.waitKey(1)
-            if key:
-                if key == ord('q'):
-                    self.running=False
-            lock.release()
+            cv2.waitKey(1)
+
+            if cv2.getWindowProperty('Video', cv2.WND_PROP_VISIBLE) < 1:
+                break
+
         video_capture.release()
         cv2.destroyAllWindows()
         self.running = False
 
     def detector_thread(self):
-        lock = threading.RLock()
         sp = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
         detector = dlib.get_frontal_face_detector()
         facerec = dlib.face_recognition_model_v1(
@@ -233,61 +211,85 @@ class StreamDetector():
         while self.running:
             if self.frame is None:
                 continue
-
-            lock.acquire()
-
+            time.sleep(0.1)
             gray = cv2.cvtColor(self.frame, cv2.COLOR_BGR2GRAY)  # gray frame
 
             # detect faces in the grayscale frame (rects)
             self.dets = detector(gray, 1)
-            for k, d in enumerate(self.dets):
-                aligned = (255 * _align_landmark(self.frame, sp, d)
-                           ).astype(np.uint8)
-                gray_aligned = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
-                _d = detector(aligned, 1)
-                self.names[k] = 'Face '+str(k)
-                try:
-                    _, __d = list(enumerate(_d))[0]
+            if(self.dets):
+                for k, d in enumerate(self.dets):
+                    aligned = (255 * _align_landmark(self.frame, sp, d)
+                               ).astype(np.uint8)
+                    gray_aligned = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
+                    _d = detector(aligned, 1)
+                    self.names[k] = 'Face '+str(k)
+                    self.dst[k] = "(None)"
+                    if _d:
+                        _, __d = list(enumerate(_d))[0]
 
-                    shape = sp(gray_aligned, __d)
+                        shape = sp(gray_aligned, __d)
 
-                    try:
-                        # find a similar face in the db
-                        face_descriptor = facerec.compute_face_descriptor(
-                            aligned, shape)
-                        cust_list = memory.keys()
-                        for i in cust_list:
-                            dst = distance.euclidean(face_descriptor, i)
-                            if(dst < 0.5):
-                                # print(dst)
-                                self.names[k] = memory[i]
-                                break
-                        # /# find a similar face in the db
-                    except:
-                        pass
+                        if True:
+                            # find a similar face in the db
+                            face_descriptor = facerec.compute_face_descriptor(
+                                aligned, shape)
+                            cust_list = memory.keys()
+                            for i in cust_list:
+                                dst = distance.euclidean(face_descriptor, i)
+                                if(dst < 0.5):
+                                    # print(dst)
+                                    self.names[k] = memory[i]
+                                    self.dst[k] = "("+str(round(dst, 2))+")"
+                                    break
+                            # /# find a similar face in the db
 
-                except:
-                    pass
-
-            lock.release()
+            else:
+                time.sleep(0.2)
 
 
-if __name__ == '__main__':
+def _save_db():
+    global memory
+    file = open("fdb.b", 'wb')
+    cPickle.dump(memory, file)
+    file.close()
+
+
+def _load_db():
+    global memory
+    try:
+        file = open("fdb.b", 'rb')
+        memory = cPickle.load(file)
+        file.close()
+    except:
+        print("Loading error")
+
+
+def main():
     cam_id = 0
+    _load_db()
     print("1. Save human")
     print("2. Stream detection")
     print("0. Exit")
-    StreamD = StreamDetector(cam_id)
-    StreamS = StreamSaver(cam_id)
+
     while True:
-        #try:
-            print(">> ", end='')
-            a = input()
+        StreamS = StreamSaver(cam_id)
+        StreamD = StreamDetector(cam_id)
+        print(">> ", end='')
+        a = input()
+        try:
             if(int(a) == 1):
                 StreamS.start()
-            if(int(a) == 2):
+            elif(int(a) == 2):
                 StreamD.start()
-            if(int(a) == 0):
+
+            elif(int(a) == 0):
+                _save_db()
                 break
-        #except:
-            #print("Error!!!")
+            else:
+                print("Missing command")
+        except ValueError:
+            print("Invalid srting")
+
+
+if __name__ == '__main__':
+    main()
