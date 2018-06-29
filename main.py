@@ -28,6 +28,7 @@ class S_D_Base():
     dets = None
     names = [""]*100
     dsts = [""]*100
+    detected = [False]*100
     face_descs = [""]*100
 
     def init_detector(self):
@@ -46,16 +47,24 @@ class S_D_Base():
                 # print(dst)
                 self.names[k] = memory[i]
                 self.dsts[k] = "("+str(round(dst, 2))+")"
+                self.detected[k] = True
                 break
         # /# find a similar face in the db
 
     def draw_face_rect(self, rect, k):
         # draw face rectangle and name
         (x, y, w, h) = self._rect2bb(rect)
-        cv2.rectangle(self.frame, (x, y),
-                      (x+w, y+h), (0, 255, 0), 2)
-        cv2.putText(
-            self.frame, "("+str(k)+")"+self.names[k] + " " + self.dsts[k], (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+        if self.detected[k]:
+            cv2.rectangle(self.frame, (x, y),
+                          (x+w, y+h), (0, 255, 0), 2)
+            cv2.putText(
+                self.frame, "("+str(k)+")"+self.names[k] + " " + self.dsts[k], (x, y-7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+        else:
+            cv2.rectangle(self.frame, (x, y),
+                          (x+w, y+h), (0, 0, 255), 2)
+            cv2.putText(
+                self.frame, "("+str(k)+")", (x, y-7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
+
         # /# draw face rectangle and name
 
     def _rect2bb(self, rect):
@@ -169,6 +178,7 @@ class StreamDetector(S_D_Base):
                     _d = detector(aligned, 1)
                     self.names[k] = 'Face '+str(k)
                     self.dsts[k] = "(None)"
+                    self.detected[k] = False
                     if _d:
                         _, __d = list(enumerate(_d))[0]
 
@@ -222,6 +232,7 @@ class PhotoDetector(S_D_Base):
                     _d = detector(aligned, 1)
                     self.names[k] = 'Face'
                     self.dsts[k] = "(None)"
+                    self.detected[k] = False
                     if _d:
                         _, __d = list(enumerate(_d))[0]
 
